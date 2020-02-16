@@ -991,77 +991,80 @@ static int mp4e_write_fragment_header(MP4E_mux_t *mux, int track_num, int data_b
     unsigned char *stack_base[20]; // atoms nesting stack
     unsigned char **stack = stack_base;
     unsigned char *pdata_offset;
-    unsigned flags;
+    unsigned flags, sample_count, ntr, ntracks = mux->tracks.bytes/sizeof(track_t);
     enum
     {
         default_sample_duration_present = 0x000008,
         default_sample_flags_present = 0x000020,
     } e;
 
-    track_t *tr = ((track_t*)mux->tracks.data) + track_num;
-
     ATOM(BOX_moof)
         ATOM_FULL(BOX_mfhd, 0)
             WRITE_4(mux->fragments_count);  // start from 1
         END_ATOM
-        ATOM(BOX_traf)
-            flags = 0;
-            if (tr->info.track_media_kind == e_video)
-                flags |= 0x20;          // default-sample-flags-present
-            else
-                flags |= 0x08;          // default-sample-duration-present
-            flags =  (tr->info.track_media_kind == e_video) ? 0x20020 : 0x20008;
-
-            ATOM_FULL(BOX_tfhd, flags)
-                WRITE_4(track_num + 1); // track_ID
+        for (ntr = 0; ntr < ntracks; ntr++)
+        {
+            track_t *tr = ((track_t*)mux->tracks.data) + ntr;
+            ATOM(BOX_traf)
+                flags = 0;
                 if (tr->info.track_media_kind == e_video)
+                    flags |= 0x20;          // default-sample-flags-present
+                else
+                    flags |= 0x08;          // default-sample-duration-present
+                flags =  (tr->info.track_media_kind == e_video) ? 0x20020 : 0x20008;
+
+                ATOM_FULL(BOX_tfhd, flags)
+                    WRITE_4(ntr + 1); // track_ID
+                    if (tr->info.track_media_kind == e_video)
+                    {
+                        flags  = 0x001;     // data-offset-present
+                        flags |= 0x100;     // sample-duration-present
+                        WRITE_4(0x1010000); // default_sample_flags
+                    } else
+                    {
+                        WRITE_4(duration);
+                    }
+                END_ATOM
+                if (tr->info.track_media_kind == e_audio)
                 {
-                    flags  = 0x001;     // data-offset-present
-                    flags |= 0x100;     // sample-duration-present
-                    WRITE_4(0x1010000); // default_sample_flags
+                    flags  = 0;
+                    flags |= 0x001;         // data-offset-present
+                    flags |= 0x200;         // sample-size-present
+                    ATOM_FULL(BOX_trun, flags)
+                        WRITE_4(1);         // sample_count
+                        pdata_offset = p; p += 4;  // save ptr to data_offset
+                        WRITE_4(duration);  // sample_duration
+                    END_ATOM
+                } else if (kind == MP4E_SAMPLE_RANDOM_ACCESS)
+                {
+                    flags  = 0;
+                    flags |= 0x001;         // data-offset-present
+                    flags |= 0x004;         // first-sample-flags-present
+                    flags |= 0x100;         // sample-duration-present
+                    flags |= 0x200;         // sample-size-present
+                    ATOM_FULL(BOX_trun, flags)
+                        WRITE_4(1);         // sample_count
+                        pdata_offset = p; p += 4;  // save ptr to data_offset
+                        WRITE_4(0x2000000); // first_sample_flags
+                        WRITE_4(duration);  // sample_duration
+                        WRITE_4(data_bytes);// sample_size
+                    END_ATOM
                 } else
                 {
-                    WRITE_4(duration);
+                    flags  = 0;
+                    flags |= 0x001;         // data-offset-present
+                    flags |= 0x100;         // sample-duration-present
+                    flags |= 0x200;         // sample-size-present
+                    ATOM_FULL(BOX_trun, flags)
+                        sample_count = (ntr == track_num);
+                        WRITE_4(sample_count);     // sample_count
+                        pdata_offset = p; p += 4;  // save ptr to data_offset
+                        WRITE_4(duration);  // sample_duration
+                        WRITE_4(data_bytes);// sample_size
+                    END_ATOM
                 }
             END_ATOM
-            if (tr->info.track_media_kind == e_audio)
-            {
-                flags  = 0;
-                flags |= 0x001;         // data-offset-present
-                flags |= 0x200;         // sample-size-present
-                ATOM_FULL(BOX_trun, flags)
-                    WRITE_4(1);         // sample_count
-                    pdata_offset = p; p += 4;  // save ptr to data_offset
-                    WRITE_4(duration);  // sample_duration
-                END_ATOM
-            } else if (kind == MP4E_SAMPLE_RANDOM_ACCESS)
-            {
-                flags  = 0;
-                flags |= 0x001;         // data-offset-present
-                flags |= 0x004;         // first-sample-flags-present
-                flags |= 0x100;         // sample-duration-present
-                flags |= 0x200;         // sample-size-present
-                ATOM_FULL(BOX_trun, flags)
-                    WRITE_4(1);         // sample_count
-                    pdata_offset = p; p += 4;   // save ptr to data_offset
-                    WRITE_4(0x2000000); // first_sample_flags
-                    WRITE_4(duration);  // sample_duration
-                    WRITE_4(data_bytes);// sample_size
-                END_ATOM
-            } else
-            {
-                flags  = 0;
-                flags |= 0x001;         // data-offset-present
-                flags |= 0x100;         // sample-duration-present
-                flags |= 0x200;         // sample-size-present
-                ATOM_FULL(BOX_trun, flags)
-                    WRITE_4(1);         // sample_count
-                    pdata_offset = p; p += 4;   // save ptr to data_offset
-                    WRITE_4(duration);  // sample_duration
-                    WRITE_4(data_bytes);// sample_size
-                END_ATOM
-            }
-        END_ATOM
+        }
     END_ATOM
     WR4(pdata_offset, (p - base) + 8);
 
